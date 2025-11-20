@@ -1,0 +1,1 @@
+Går ikke å dele platformIO kode over github ser det ut som, så kopier koden og legg det i arduinoIDE, eller lag ett nytt platformIO prosjekt og lim inn i main.cpp
