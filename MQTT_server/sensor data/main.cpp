@@ -51,13 +51,14 @@ void reconnect() {
 }
 
 String getSensorValues() {
-  String s;
-  s += "\"temperature\":";
+  String s = "{";
+  s += "\"temperature_c\":";
   s += String(bme.readTemperature(), 2);
-  s += ",\"pressure\":";
+  s += ",\"pressure_hpa\":";
   s += String(bme.readPressure() / 100.0F, 2);
-  s += ",\"humidity\":";
+  s += ",\"humidity_perc\":";
   s += String(bme.readHumidity(), 2);
+  s += "}";
   return s;
 }
 
