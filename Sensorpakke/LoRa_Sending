@@ -39,7 +39,7 @@ void setup() {
 
 void loop() {
   
-  int state = radio.transmit("MJM Solid Enigneering pakke " + String(teller));
+  int state = radio.transmit("P " + String(teller));
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("Pakke sendt " + String(teller));
