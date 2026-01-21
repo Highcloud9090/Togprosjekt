@@ -38,15 +38,15 @@ void setup() {
 }
 
 void loop() {
-  String pakke;
-  int state = radio.receive(pakke);
+  String data;
+  int state = radio.receive(data);
   
   if (state == RADIOLIB_ERR_NONE) {
 
     int16_t RSSI = radio.getRSSI();
     int16_t SNR = radio.getSNR();
 
-    Serial.println("Pakke" + String(teller));
+    Serial.println("Pakke " + String(teller));
     Serial.println("RSSI = " + String(RSSI));
     Serial.println("SNR = " + String(SNR));
     Serial.println("-------------------");
