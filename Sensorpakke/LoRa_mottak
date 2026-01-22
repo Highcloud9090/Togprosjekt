@@ -11,7 +11,6 @@
 #define SPI_MOSI 25
 
 SX1276 radio = new Module(RFM_CS, RFM_DIO0, RFM_RST, -1);
-int teller = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -38,6 +37,7 @@ void setup() {
 }
 
 void loop() {
+  
   String data;
   int state = radio.receive(data);
   
@@ -46,17 +46,37 @@ void loop() {
     int16_t RSSI = radio.getRSSI();
     int16_t SNR = radio.getSNR();
 
-    Serial.println("Pakke " + String(teller));
+    Serial.println(String(data));
     Serial.println("RSSI = " + String(RSSI));
     Serial.println("SNR = " + String(SNR));
     Serial.println("-------------------");
   } 
   
   else {
-    Serial.print("Mottak feilet, feilkode: ");
-    Serial.println(state);
-  }
+    int state = radio.receive(data);
+    switch (state) {
+      case RADIOLIB_ERR_RX_TIMEOUT:
+      Serial.println("Feil: Timeout (ingen pakke)");
+        break;
 
-  teller += 1;
+      case RADIOLIB_ERR_CRC_MISMATCH:
+      Serial.println("Feil: CRC mismatch (korrupt pakke)");
+        break;
+
+      case RADIOLIB_ERR_WRONG_MODEM:
+      Serial.println("Feil: Wrong modem (ikke LoRa-signal)");
+        break;
+
+      case RADIOLIB_ERR_INVALID_FREQUENCY:
+      Serial.println("Feil: Invalid frequency (kode 7)");
+        break;
+
+    default:
+      Serial.print("Ukjent feil: ");
+      Serial.println(state);
+      break;
+    }
+
+  }
 
 }
