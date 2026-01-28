@@ -4,11 +4,13 @@
 #include <MPU6050.h>
 #include <SPI.h>
 #include <RadioLib.h>
+#include <ArduinoJson.h>
 
 //Husk å definere disse:
 //MPU6050
-#define SDA_PIN 33
-#define SCL_PIN 32
+#define SDA_PIN 4
+#define SCL_PIN 5
+
 //RFM9x
 #define RFM_CS   33
 #define RFM_RST  32
@@ -21,7 +23,6 @@
 //LORA:
 SX1276 radio = new Module(RFM_CS, RFM_DIO0, RFM_RST, -1);
 int teller = 0;
-
 
 
 //AKSELEROMETER:
@@ -65,6 +66,7 @@ void calibrateSensor(int n) {
   Serial.print("Gyro X: "); Serial.print(gx_offset);
   Serial.print("  Y: "); Serial.print(gy_offset);
   Serial.print("  Z: "); Serial.println(gz_offset);
+  
 }
 
 
@@ -109,6 +111,8 @@ void setup() {
   Serial.println("MPU6050 Raw + Software Offset Test");
 
   mpu.initialize();
+  mpu.setSleepEnabled(false);
+
   Serial.println("Starter MPU6050");
   delay(2000);
 
@@ -141,36 +145,28 @@ void loop() {
   float azs2 = (az_raw - az_offset); // 16384.0 * 9.80665;
 
   // Gyro i deg/s
-  float gxdps = (gx_raw - gx_offset) / 32.8;
-  float gydps = (gy_raw - gy_offset) / 32.8;
-  float gzdps = (gz_raw - gz_offset) / 32.8;
+  float gxdps = (gx_raw - gx_offset); // 32.8;
+  float gydps = (gy_raw - gy_offset); // 32.8;
+  float gzdps = (gz_raw - gz_offset); // 32.8;
 
-  Serial.print("Måling: "); Serial.println(teller);
-
-  Serial.print("Accel X: "); Serial.print(axs2);
-  Serial.print("  Y: "); Serial.print(ays2);
-  Serial.print("  Z: "); Serial.println(azs2);
-  Serial.print("Gyro X: "); Serial.print(gxdps);
-  Serial.print("  Y: "); Serial.print(gydps);
-  Serial.print("  Z: "); Serial.println(gzdps);
-
-  Serial.println();
 
   
-  //Lagre datamålingene før sending (å bruke char og snprintf er 
-  //tydligvis bedre for sending over Lora):
-  char data[256];
-  snprintf(
-    data,
-    sizeof(data),
-    "Måling: %d\n"
-    "Aksel: X: %.1f Y: %.1f Z: %.1f\n"
-    "Gyro:  X: %.2f Y: %.2f Z: %.2f\n",
-    teller,
-    axs2, ays2, azs2,
-    gxdps, gydps, gzdps
-  );
+  //Lagre datamålingene som en Json før dataen sendes:
+  StaticJsonDocument<256> doc;
+  doc["teller"] = teller;
 
+  JsonObject aksel = doc.createNestedObject("aksel");
+  aksel["x"] = axs2;
+  aksel["y"] = ays2;
+  aksel["z"] = azs2;
+
+  JsonObject gyro = doc.createNestedObject("gyro");
+  gyro["x"] = gxdps;
+  gyro["y"] = gydps;
+  gyro["z"] = gzdps;
+
+  char data[256];
+  serializeJson(doc, data, sizeof(data));
 
   //SENDE DATA
   int state = radio.transmit(data);
@@ -185,4 +181,15 @@ void loop() {
   teller += 1;
   delay(100);
 
+  //Skriv data som blir sendt
+  Serial.print("Måling: "); Serial.println(teller);
+
+  Serial.print("Accel X: "); Serial.print(axs2);
+  Serial.print("  Y: "); Serial.print(ays2);
+  Serial.print("  Z: "); Serial.println(azs2);
+  Serial.print("Gyro X: "); Serial.print(gxdps);
+  Serial.print("  Y: "); Serial.print(gydps);
+  Serial.print("  Z: "); Serial.println(gzdps);
+
+  Serial.println();
 }
