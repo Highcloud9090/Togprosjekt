@@ -5,22 +5,21 @@
 #include <SPI.h>
 #include <RadioLib.h>
 #include <ArduinoJson.h>
-#include <RTClib.h>  // Bibliotek for RTC
+#include <RTClib.h>
 
-// MPU6050 pins
-#define SDA_PIN 18
-#define SCL_PIN 5
+// I2C pins
+#define SDA_PIN 21
+#define SCL_PIN 18
 
 // LoRa pins
-#define RFM_CS   26
+#define RFM_CS   25
 #define RFM_RST  26
-#define RFM_DIO0 34
-#define SPI_SCK  35
+#define RFM_DIO0 27
+#define SPI_SCK  14
 #define SPI_MISO 32
 #define SPI_MOSI 33
 
-// Antall målinger per pakke
-#define ANTALL 50
+#define ANTALL 1
 
 // LoRa
 SX1276 radio = new Module(RFM_CS, RFM_DIO0, RFM_RST, -1);
@@ -30,44 +29,37 @@ int teller = 0;
 RTC_PCF8523 rtc;
 
 // MPU6050
-MPU6050 mpu;
+MPU6050 mpu(0x69);
 float ax_offset = 0, ay_offset = 0, az_offset = 0;
 float gx_offset = 0, gy_offset = 0, gz_offset = 0;
 
-// Struct for én måling
-struct Måling {
+struct Measure {
   float ax, ay, az;
   float gx, gy, gz;
   char timestamp[20];
 };
 
-// Buffer for mange målinger
-Måling buffer[ANTALL];
+Measure buffer[ANTALL];
 int bufferTeller = 0;
 
-// Funksjon for å kalibrere sensor
+// Kalibrering
 void calibrateSensor(int n) {
-  long ax_sum = 0, ay_sum = 0, az_sum = 0;
-  long gx_sum = 0, gy_sum = 0, gz_sum = 0;
+  long ax_sum=0, ay_sum=0, az_sum=0, gx_sum=0, gy_sum=0, gz_sum=0;
   int16_t ax, ay, az, gx, gy, gz;
 
-  for (int i = 0; i < n; i++) {
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    ax_sum += ax;
-    ay_sum += ay;
-    az_sum += az;
-    gx_sum += gx;
-    gy_sum += gy;
-    gz_sum += gz;
+  for(int i=0;i<n;i++){
+    mpu.getMotion6(&ax,&ay,&az,&gx,&gy,&gz);
+    ax_sum+=ax; ay_sum+=ay; az_sum+=az;
+    gx_sum+=gx; gy_sum+=gy; gz_sum+=gz;
     delay(5);
   }
 
-  ax_offset = ax_sum / (float)n;
-  ay_offset = ay_sum / (float)n;
-  az_offset = (az_sum / (float)n) - 16384.0;
-  gx_offset = gx_sum / (float)n;
-  gy_offset = gy_sum / (float)n;
-  gz_offset = gz_sum / (float)n;
+  ax_offset = ax_sum/(float)n;
+  ay_offset = ay_sum/(float)n;
+  az_offset = (az_sum/(float)n)-16384.0;
+  gx_offset = gx_sum/(float)n;
+  gy_offset = gy_sum/(float)n;
+  gz_offset = gz_sum/(float)n;
 
   Serial.println("Offsets beregnet:");
   Serial.print("Accel X: "); Serial.print(ax_offset);
@@ -78,79 +70,89 @@ void calibrateSensor(int n) {
   Serial.print("  Z: "); Serial.println(gz_offset);
 }
 
-// Funksjon for å sende buffer via LoRa som JSON
+// Send buffer via LoRa
 void sendBuffer() {
-  StaticJsonDocument<2048> doc;  // Stor nok for 50 målinger
+  StaticJsonDocument<2048> doc;
   JsonArray arr = doc.createNestedArray("målinger");
 
-  for (int i = 0; i < ANTALL; i++) {
+  for(int i=0;i<ANTALL;i++){
     JsonObject m = arr.createNestedObject();
     m["timestamp"] = buffer[i].timestamp;
 
     JsonObject aksel = m.createNestedObject("aksel");
-    aksel["x"] = buffer[i].ax;
-    aksel["y"] = buffer[i].ay;
-    aksel["z"] = buffer[i].az;
+    aksel["x"]=buffer[i].ax; aksel["y"]=buffer[i].ay; aksel["z"]=buffer[i].az;
 
     JsonObject gyro = m.createNestedObject("gyro");
-    gyro["x"] = buffer[i].gx;
-    gyro["y"] = buffer[i].gy;
-    gyro["z"] = buffer[i].gz;
+    gyro["x"]=buffer[i].gx; gyro["y"]=buffer[i].gy; gyro["z"]=buffer[i].gz;
   }
 
   char data[2048];
-  serializeJson(doc, data, sizeof(data));
+  serializeJson(doc,data,sizeof(data));
 
   int state = radio.transmit(data);
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("Buffer sendt!");
-  } else {
-    Serial.print("Feil ved sending: "); Serial.println(state);
-  }
+  if(state==RADIOLIB_ERR_NONE) Serial.println("Buffer sendt!");
+  else { Serial.print("Feil ved sending: "); Serial.println(state); }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
 
-  // RTC
-  if (!rtc.begin()) {
-    Serial.println("Kunne ikke finne RTC");
-    while (1);
-  }
+  // Start I2C
+  Wire.begin(SDA_PIN,SCL_PIN);
+  delay(200);
 
-  if (!rtc.initialized() || rtc.lostPower()) {
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
-
-  // LoRa
-  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI, RFM_CS);
-  if (radio.begin(868.0) != RADIOLIB_ERR_NONE) {
-    Serial.println("Radio feilet");
-    while (true);
-  }
-
-  radio.setOutputPower(20);
-  radio.setSpreadingFactor(12);
-  radio.setBandwidth(125.0);
-  radio.setCodingRate(5);
-
-  // MPU6050
-  Wire.begin(SDA_PIN, SCL_PIN);
+  // Init MPU6050
+  Serial.println("Starter MPU6050");
   mpu.initialize();
+  delay(100);
   mpu.setSleepEnabled(false);
+  delay(100);
 
-  if (!mpu.testConnection()) {
+  if(!mpu.testConnection()){
     Serial.println("MPU6050 ikke koblet til!");
-    while (1);
+    while(1);
   }
 
   mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
   mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_1000);
+  Serial.println("MPU6050 startet");
 
+  delay(100);
+
+  // Init RTC
+  Serial.println("Starter RTC");
+  if(!rtc.begin()){
+    Serial.println("Kunne ikke finne RTC");
+    while(1);
+  }
+
+  if(!rtc.initialized() || rtc.lostPower()){
+    Serial.println("RTC ikke initialisert, setter tid til kompileringstid");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  Serial.println("RTC startet");
+
+  // LoRa
+  Serial.println("Starter Radio");
+  SPI.begin(SPI_SCK,SPI_MISO,SPI_MOSI,RFM_CS);
+  if(radio.begin(868.0)!=RADIOLIB_ERR_NONE){
+    Serial.println("Radio feilet");
+    while(true);
+  }
+
+  radio.setOutputPower(20);
+  radio.setSpreadingFactor(7);
+  radio.setBandwidth(250.0);
+  radio.setCodingRate(5);
+  Serial.println("Vellykket radio start");
+
+  // Kalibrering
+  delay(200);
   calibrateSensor(2500);
   Serial.println("Kalibrering ferdig!");
 }
+
 
 void loop() {
   // Hent akselerometer + gyro
@@ -193,3 +195,4 @@ void loop() {
   Serial.print("Måling: "); Serial.println(teller);
   delay(50);
 }
+
