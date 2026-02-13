@@ -1,0 +1,197 @@
+// =======================================================
+// LilyGO T-SIM7000G: MPU6050 + MicroSD + LTE (TinyGSM + ArduinoHttpClient)
+// =======================================================
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+
+#define TINY_GSM_MODEM_SIM7000
+#include <TinyGsmClient.h>
+#include <ArduinoHttpClient.h>
+
+// ----------------- Pins -----------------
+#define SDA_PIN 21
+#define SCL_PIN 22
+#define SD_CS   4
+#define MODEM_TX 27
+#define MODEM_RX 26
+#define MODEM_PWRKEY 4
+
+// ----------------- LTE Settings -----------------
+const char apn[] = "YOUR_APN";               // Sett APN for SIM
+const char simPIN[] = "";                    // SIM PIN hvis nødvendig
+const char serverHost[] = "your-server.com"; // Node-RED host
+const int serverPort = 80;
+const char serverPath[] = "/data";           // Node-RED endpoint
+
+// ----------------- MPU6050 -----------------
+Adafruit_MPU6050 mpu;
+
+// ----------------- LTE Objects -----------------
+HardwareSerial SerialAT(1);           // ESP32 Serial1
+TinyGsm modem(SerialAT);
+TinyGsmClient gsmClient(modem);
+HttpClient http(gsmClient, serverHost, serverPort);
+
+// ----------------- Adaptive sampling -----------------
+#define NORMAL_FREQ 4      // Hz
+#define EVENT_FREQ 10      // Hz
+#define EVENT_THRESHOLD 15.0  // m/s² akselerasjon threshold
+
+// ----------------- SD buffer -----------------
+#define BUFFER_SIZE 500
+struct Sample {
+  float ax, ay, az;
+  float gx, gy, gz;
+  unsigned long timestamp;
+};
+Sample buffer[BUFFER_SIZE];
+int bufferIndex = 0;
+
+// ----------------- Funksjonsdeclarations -----------------
+void saveBufferToSD();
+void sendBufferLTE();
+
+// =======================================================
+// Setup
+// =======================================================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  // I2C MPU6050
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!mpu.begin()) {
+    Serial.println("MPU6050 ikke funnet!");
+    while (1);
+  }
+  Serial.println("MPU6050 klar");
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+  mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  // MicroSD
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD-kort ikke funnet!");
+    while (1);
+  }
+  Serial.println("SD-kort klart");
+
+  // LTE modem
+  SerialAT.begin(9600, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  delay(3000);
+  modem.restart();
+  if (strlen(simPIN)) modem.simUnlock(simPIN);
+
+  Serial.println("Kobler til mobilnett...");
+  if (!modem.waitForNetwork()) {
+    Serial.println("Kan ikke koble til mobilnett!");
+    while (1);
+  }
+
+  if (!modem.gprsConnect(apn, "", "")) {
+    Serial.println("GPRS connect feil");
+    while (1);
+  }
+  Serial.println("GPRS tilkoblet");
+}
+
+// =======================================================
+// Loop
+// =======================================================
+void loop() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  float ax = a.acceleration.x;
+  float ay = a.acceleration.y;
+  float az = a.acceleration.z;
+
+  float gx = g.gyro.x;
+  float gy = g.gyro.y;
+  float gz = g.gyro.z;
+
+  unsigned long timestamp = millis();
+
+  // Velg samplingrate basert på threshold
+  int freq = NORMAL_FREQ;
+  if (abs(ax) > EVENT_THRESHOLD || abs(ay) > EVENT_THRESHOLD || abs(az) > EVENT_THRESHOLD) {
+    freq = EVENT_FREQ;
+  }
+
+  // Lagre i buffer
+  buffer[bufferIndex++] = {ax, ay, az, gx, gy, gz, timestamp};
+
+  // Hvis buffer full, lagre til SD og send til server
+  if (bufferIndex >= BUFFER_SIZE) {
+    saveBufferToSD();
+    sendBufferLTE();
+    bufferIndex = 0;
+  }
+
+  delay(1000 / freq);
+}
+
+// =======================================================
+// Lagre buffer til SD
+// =======================================================
+void saveBufferToSD() {
+  String filename = "/data.txt";
+  File file = SD.open(filename.c_str(), FILE_APPEND);
+  if (file) {
+    for (int i = 0; i < bufferIndex; i++) {
+      file.printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                  buffer[i].timestamp,
+                  buffer[i].ax, buffer[i].ay, buffer[i].az,
+                  buffer[i].gx, buffer[i].gy, buffer[i].gz);
+    }
+    file.close();
+    Serial.println("Data lagret til SD");
+  } else {
+    Serial.println("Feil: Kan ikke åpne SD-fil");
+  }
+}
+
+// =======================================================
+// Send buffer over LTE via TinyGsm + ArduinoHttpClient
+// =======================================================
+void sendBufferLTE() {
+  // reconnect hvis nødvendig
+  if (!gsmClient.connected()) {
+    Serial.println("LTE client ikke tilkoblet, prøver å koble...");
+    modem.gprsConnect(apn, "", "");
+  }
+
+  // Lag JSON data
+  String json = "[";
+  for (int i = 0; i < bufferIndex; i++) {
+    json += String("{\"ts\":") + buffer[i].timestamp +
+            ",\"ax\":" + buffer[i].ax +
+            ",\"ay\":" + buffer[i].ay +
+            ",\"az\":" + buffer[i].az +
+            ",\"gx\":" + buffer[i].gx +
+            ",\"gy\":" + buffer[i].gy +
+            ",\"gz\":" + buffer[i].gz + "}";
+    if (i < bufferIndex - 1) json += ",";
+  }
+  json += "]";
+
+  // send HTTP POST
+  http.beginRequest();
+  http.post(serverPath);
+  http.sendHeader("Content-Type", "application/json");
+  http.sendHeader("Content-Length", json.length());
+  http.beginBody();
+  http.print(json);
+  http.endRequest();
+
+  int status = http.responseStatusCode();
+  String resp = http.responseBody();
+
+  Serial.print("HTTP Status: "); Serial.println(status);
+  Serial.println("Response: " + resp);
+}
