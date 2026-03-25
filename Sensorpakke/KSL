@@ -1,0 +1,153 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <SPI.h>
+#include <SD.h>
+#include <FS.h>
+#include <RTClib.h>
+
+// ---------------- PIN SETUP ----------------
+
+// MPU6050
+#define SDA_PIN 18
+#define SCL_PIN 5
+
+// SD-kort
+#define SD_CS   13
+#define SD_SCK  14
+#define SD_MISO 12
+#define SD_MOSI 27
+
+// ---------------- OBJEKTER ----------------
+
+Adafruit_MPU6050 mpu;
+RTC_PCF8523 rtc;
+File logFile;
+
+// ---------------- BUFFER ----------------
+
+#define BUFFER_SIZE 25
+String buffer[BUFFER_SIZE];  // CSV-linjer som midlertidig lagres
+int bufferIndex = 0;
+int flushCounter = 0;
+
+// ---------------- TIMING ----------------
+
+const int sampleInterval = 50; // 20 Hz
+unsigned long lastSample = 0;
+
+// ---------------- SETUP ----------------
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+
+  // RTC
+  if (!rtc.begin()) {
+    Serial.println("RTC feil");
+    while (1);
+  }
+  if (!rtc.initialized() || rtc.lostPower()) {
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+  delay(200);
+
+  // SD
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS)) {
+    Serial.println("SD-kort feilet!");
+    while (1);
+  }
+  delay(200);
+
+  // Åpne/lag CSV-fil
+  logFile = SD.open("/data.csv", FILE_APPEND);
+  if (!logFile) {
+    Serial.println("Kunne ikke åpne fil!");
+    while (1);
+  }
+  Serial.println("SD-kort klart");
+  delay(200);
+
+  // Skriv header hvis filen er tom
+  if (logFile.size() == 0) {
+    logFile.println("teller,timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z");
+    logFile.flush();
+  }
+  delay(200);
+
+  // MPU6050
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!mpu.begin()) {
+    Serial.println("Kunne ikke starte MPU6050!");
+    while (1);
+  }
+  delay(200);
+
+  //MPU6050 målesensetivitet
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+  mpu.setGyroRange(MPU6050_RANGE_1000_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  Serial.println("MPU6050 klar");
+}
+
+// ---------------- WRITE BUFFER ----------------
+
+void writeBufferToSD() {
+  if (!logFile) return;
+
+  for (int i = 0; i < bufferIndex; i++) {
+    logFile.println(buffer[i]);
+  }
+  bufferIndex = 0;
+
+  flushCounter++;
+  if (flushCounter >= 5) { // flush sjeldnere
+    logFile.flush();
+    flushCounter = 0;
+    Serial.println("Flush til SD");
+  }
+}
+
+// ---------------- LOOP ----------------
+
+int teller = 0;
+
+void loop() {
+  if (millis() - lastSample >= sampleInterval) {
+    lastSample = millis();
+
+    // Hent sensor-data
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+
+    // Tid
+    DateTime now = rtc.now();
+    char timestamp[25];
+    sprintf(timestamp, "%04d-%02d-%02d %02d:%02d:%02d",
+            now.year(), now.month(), now.day(),
+            now.hour(), now.minute(), now.second());
+
+    // Lag CSV-linje
+    String line = String(teller) + "," + String(timestamp) + "," +
+                  String(a.acceleration.x, 3) + "," +
+                  String(a.acceleration.y, 3) + "," +
+                  String(a.acceleration.z, 3) + "," +
+                  String(g.gyro.x, 3) + "," +
+                  String(g.gyro.y, 3) + "," +
+                  String(g.gyro.z, 3);
+
+    // Legg i buffer
+    buffer[bufferIndex++] = line;
+
+    if (bufferIndex >= BUFFER_SIZE) {
+      writeBufferToSD();
+    }
+
+    // Debug
+    Serial.println(line);
+    teller++;
+  }
+}
