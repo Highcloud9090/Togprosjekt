@@ -9,13 +9,13 @@
 // ---------------- PIN SETUP ----------------
 
 // MPU6050
-#define SDA_PIN 18
-#define SCL_PIN 5
+#define SDA_PIN 21
+#define SCL_PIN 18
 
 // SD-kort
-#define SD_CS   13
-#define SD_SCK  14
-#define SD_MISO 12
+#define SD_CS   25
+#define SD_SCK  26
+#define SD_MISO 34
 #define SD_MOSI 27
 
 // ---------------- OBJEKTER ----------------
@@ -33,7 +33,7 @@ int flushCounter = 0;
 
 // ---------------- TIMING ----------------
 
-const int sampleInterval = 50; // 20 Hz
+const int sampleInterval = 100; // 10 Hz
 unsigned long lastSample = 0;
 
 // ---------------- RAW LESING ----------------
@@ -41,10 +41,10 @@ unsigned long lastSample = 0;
 void readRawMPU(int16_t &ax, int16_t &ay, int16_t &az,
                 int16_t &gx, int16_t &gy, int16_t &gz) {
 
-  Wire.beginTransmission(0x68);
+  Wire.beginTransmission(0x69);
   Wire.write(0x3B);
   Wire.endTransmission(false);
-  Wire.requestFrom(0x68, 14, true);
+  Wire.requestFrom(0x69, 14, true);
 
   if (Wire.available() < 14) return;
 
@@ -68,7 +68,7 @@ void calibrateSensor(int n) {
 
   int16_t ax, ay, az, gx, gy, gz;
 
-  Serial.println("Kalibrerer... hold sensoren i ro!");
+  Serial.println("Kalibrerer... hold sensoren i ro lil bitch!");
 
   for (int i = 0; i < n; i++) {
     readRawMPU(ax, ay, az, gx, gy, gz);
@@ -92,11 +92,11 @@ void calibrateSensor(int n) {
   gz_offset = gz_sum / n;
 
   Serial.println("Offsets:");
-  Serial.print("AX: "); Serial.print(ax_offset);
+  Serial.print(" AX: "); Serial.print(ax_offset);
   Serial.print(" AY: "); Serial.print(ay_offset);
   Serial.print(" AZ: "); Serial.println(az_offset);
 
-  Serial.print("GX: "); Serial.print(gx_offset);
+  Serial.print(" GX: "); Serial.print(gx_offset);
   Serial.print(" GY: "); Serial.print(gy_offset);
   Serial.print(" GZ: "); Serial.println(gz_offset);
 }
@@ -106,6 +106,9 @@ void calibrateSensor(int n) {
 void setup() {
   Serial.begin(115200);
   delay(500); // viktig for Serial
+
+  //START I2C
+  Wire.begin(SDA_PIN, SCL_PIN);
 
   // RTC
   if (!rtc.begin()) {
@@ -145,10 +148,8 @@ void setup() {
   delay(200);
 
   // MPU
-  Wire.begin(SDA_PIN, SCL_PIN);
-  delay(200);
 
-  if (!mpu.begin()) {
+  if (!mpu.begin(0x69)) {
     Serial.println("MPU6050 feil!");
     while (1);
   }
@@ -198,9 +199,14 @@ void loop() {
     DateTime now = rtc.now();
     char timestamp[25];
 
+    if(now.year() >= 2020 && now.year() <= 2030){
     sprintf(timestamp, "%04d-%02d-%02d %02d:%02d:%02d",
             now.year(), now.month(), now.day(),
             now.hour(), now.minute(), now.second());
+    }
+    else{
+    sprintf(timestamp, "non");
+    }
 
     // CSV linje
     sprintf(buffer[bufferIndex],
